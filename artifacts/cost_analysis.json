@@ -1,6 +1,6 @@
 {
   "cost_fp_fixed_fcfa": 2000,
-  "cost_fn": "montant réel de la transaction",
+  "cost_fn": "montant rÃ©el de la transaction",
   "optimal_threshold": 0.83,
   "at_optimal": {
     "cost_total_fcfa": 3199,
