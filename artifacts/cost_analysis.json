@@ -1,0 +1,17 @@
+{
+  "cost_fp_fixed_fcfa": 2000,
+  "cost_fn": "montant réel de la transaction",
+  "optimal_threshold": 0.83,
+  "at_optimal": {
+    "cost_total_fcfa": 3199,
+    "saved_fcfa": 21213,
+    "net_benefit_fcfa": 21213,
+    "precision": 1.0,
+    "recall": 0.7143,
+    "f1": 0.8333,
+    "tp": 60,
+    "fp": 0,
+    "fn": 24,
+    "tn": 12000
+  }
+}

@@ -1,0 +1,6 @@
+/* FraudShield — Style personnalisé */
+body { background-color: #f5f6fa; }
+.card { border-radius: 8px; }
+.card-header { background-color: #f8f9fa; font-weight: 600; }
+.dash-table-container { border-radius: 8px; overflow: hidden; }
+.nav-link.active { font-weight: 600; }

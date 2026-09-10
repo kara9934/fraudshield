@@ -1,0 +1,30 @@
+# Core ML
+lightgbm==4.5.0
+shap==0.46.0
+scikit-learn==1.5.2
+pandas==2.2.3
+numpy==1.26.4
+joblib==1.4.2
+pyarrow==17.0.0
+
+# Dashboard (Dash)
+dash==2.18.2
+dash-bootstrap-components==1.6.0
+plotly==5.24.1
+
+# API temps réel (FastAPI)
+fastapi==0.115.0
+uvicorn==0.30.0
+python-multipart==0.0.9
+
+# Copilote IA (Groq — gratuit)
+groq==0.15.0
+
+# Base de données (Supabase — gratuit)
+supabase==2.10.0
+
+# Déploiement
+gunicorn==22.0.0
+
+# Chargement variables d'environnement
+python-dotenv==1.0.1

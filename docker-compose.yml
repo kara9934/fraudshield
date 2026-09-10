@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    ports:
+      - "8000:7860"
+    env_file: .env
+    restart: unless-stopped
+
+  dashboard:
+    build:
+      context: .
+      target: dash
+    ports:
+      - "8050:8050"
+    env_file: .env
+    restart: unless-stopped
+    depends_on:
+      - api

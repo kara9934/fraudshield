@@ -1,0 +1,16 @@
+feature,mean_abs_shap,pct
+amount_ratio,1.418,44.8397
+account_age_days,0.53,16.7597
+distance_from_home_km,0.24,7.5876
+hour,0.2355,7.4463
+txn_last_hour,0.1768,5.5905
+avg_amount_30d,0.1248,3.9474
+merchant_encoded,0.1165,3.6823
+num_declines_today,0.1028,3.2498
+log_distance,0.0692,2.1897
+amount,0.0632,1.9998
+card_present,0.0396,1.2512
+foreign_country,0.024,0.7577
+log_amount,0.0209,0.6604
+is_night,0.0011,0.0357
+high_risk_category,0.0001,0.0024

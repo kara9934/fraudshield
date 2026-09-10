@@ -1,0 +1,17 @@
+{
+  "baseline_lr": {
+    "pr_auc": 0.85
+  },
+  "lightgbm_tuned": {
+    "pr_auc": 0.8645,
+    "roc_auc": 0.9798,
+    "best_params": {
+      "n_estimators": 500,
+      "learning_rate": 0.02,
+      "num_leaves": 15,
+      "max_depth": 4,
+      "scale_pos_weight": 1.0
+    },
+    "cv_pr_auc": 0.8363
+  }
+}
