@@ -46,9 +46,9 @@ model = joblib.load(ARTIFACT_DIR / "lgbm_model.joblib")
 threshold = joblib.load(ARTIFACT_DIR / "optimal_threshold.joblib")
 merchant_encoder = load_merchant_encoder()
 
-with open(ARTIFACT_DIR / "cost_analysis.json") as f:
+with open(ARTIFACT_DIR / "cost_analysis.json", encoding="utf-8") as f:
     cost_info = json.load(f)
-with open(ARTIFACT_DIR / "metrics.json") as f:
+with open(ARTIFACT_DIR / "metrics.json", encoding="utf-8") as f:
     metrics_info = json.load(f)
 
 X_test = pd.read_parquet(ARTIFACT_DIR / "X_test.parquet")

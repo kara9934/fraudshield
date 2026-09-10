@@ -60,9 +60,9 @@ async def lifespan(app: FastAPI):
     state["model"] = joblib.load(ARTIFACT_DIR / "lgbm_model.joblib")
     state["threshold"] = joblib.load(ARTIFACT_DIR / "optimal_threshold.joblib")
     state["encoder"] = load_merchant_encoder()
-    with open(ARTIFACT_DIR / "metrics.json") as f:
+    with open(ARTIFACT_DIR / "metrics.json", encoding="utf-8") as f:
         state["metrics"] = json.load(f)
-    with open(ARTIFACT_DIR / "cost_analysis.json") as f:
+    with open(ARTIFACT_DIR / "cost_analysis.json", encoding="utf-8") as f:
         state["cost"] = json.load(f)
     state["start_time"] = time.time()
     state["request_count"] = 0
