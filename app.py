@@ -1,17 +1,7 @@
 """
 app.py — Dashboard opérationnel · FraudShield
-Vues :
-  /             → Login (si Supabase configuré) ou redirection directe
-  /saisie       → Saisie manuelle + import CSV, scoring immédiat
-  /analyste     → Historique transactions, drill-down SHAP, feedback
-  /admin        → KPIs modèle, importance SHAP globale, gestion
-
-Intégration Supabase :
-  - Auth : login/logout, rôle (analyst/admin)
-  - Historique : transactions scorées enregistrées en BD
-  - Feedback : décision analyste (confirmed_fraud, false_positive, escalated)
-
-Mode dégradé : sans Supabase, scoring local fonctionne (pas d'historique/auth).
+Optimisé pour Render free tier (512 MB RAM, 0.1 CPU).
+Chargement lazy : modèle + SHAP chargés au premier clic, pas au démarrage.
 """
 
 from dotenv import load_dotenv
@@ -25,7 +15,6 @@ from pathlib import Path
 
 import dash
 import dash_bootstrap_components as dbc
-import joblib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -39,13 +28,10 @@ from features import (
     engineer_features,
     load_merchant_encoder,
 )
-from explain import explain_single, generate_summary, get_global_importance
 from database import is_configured as db_configured
 
-# ── Chargement artefacts (léger — pas de X_test au démarrage) ──
+# ── Chargement minimal au démarrage (pas de modèle, pas de SHAP) ──
 ARTIFACT_DIR = Path(__file__).parent / "artifacts"
-model = joblib.load(ARTIFACT_DIR / "lgbm_model.joblib")
-threshold = joblib.load(ARTIFACT_DIR / "optimal_threshold.joblib")
 merchant_encoder = load_merchant_encoder()
 
 with open(ARTIFACT_DIR / "cost_analysis.json", encoding="utf-8") as f:
@@ -53,20 +39,46 @@ with open(ARTIFACT_DIR / "cost_analysis.json", encoding="utf-8") as f:
 with open(ARTIFACT_DIR / "metrics.json", encoding="utf-8") as f:
     metrics_info = json.load(f)
 
-# ── Chargement lazy de X_test / y_test (économie mémoire) ──────
-_test_data_cache = {}
+DB_ENABLED = db_configured()
+
+# ── Cache lazy pour objets lourds ──────────────────────────────
+_cache = {}
+
+def _get_model():
+    """Charge le modèle LightGBM à la demande."""
+    if "model" not in _cache:
+        import joblib
+        _cache["model"] = joblib.load(ARTIFACT_DIR / "lgbm_model.joblib")
+    return _cache["model"]
+
+def _get_threshold():
+    """Charge le seuil à la demande."""
+    if "threshold" not in _cache:
+        import joblib
+        _cache["threshold"] = joblib.load(ARTIFACT_DIR / "optimal_threshold.joblib")
+    return _cache["threshold"]
 
 def _get_test_data():
-    """Charge X_test et y_test à la demande (pas au démarrage)."""
-    if "X" not in _test_data_cache:
+    """Charge X_test et y_test à la demande (échantillon réduit)."""
+    if "X_test" not in _cache:
         _X = pd.read_parquet(ARTIFACT_DIR / "X_test.parquet")
         _y = pd.read_parquet(ARTIFACT_DIR / "y_test.parquet")["is_fraud"]
         idx = _X.sample(n=min(500, len(_X)), random_state=42).index
-        _test_data_cache["X"] = _X.loc[idx].reset_index(drop=True)
-        _test_data_cache["y"] = _y.loc[idx].reset_index(drop=True)
-    return _test_data_cache["X"], _test_data_cache["y"]
+        _cache["X_test"] = _X.loc[idx].reset_index(drop=True)
+        _cache["y_test"] = _y.loc[idx].reset_index(drop=True)
+        del _X, _y
+    return _cache["X_test"], _cache["y_test"]
 
-DB_ENABLED = db_configured()
+def _explain_single(X_row):
+    """Wrapper lazy pour explain_single."""
+    from explain import explain_single
+    return explain_single(X_row)
+
+def _generate_summary(result, mode="auto"):
+    """Wrapper lazy pour generate_summary."""
+    from explain import generate_summary
+    return generate_summary(result, mode=mode)
+
 
 # ── App ────────────────────────────────────────────────────────
 app = dash.Dash(
@@ -87,9 +99,10 @@ server = app.server  # pour Gunicorn
 # ══════════════════════════════════════════════════════════════
 
 def score_badge(score):
-    if score >= threshold:
+    thr = _get_threshold()
+    if score >= thr:
         return dbc.Badge(f"FRAUDE ({score:.1%})", color="danger", className="fs-6 px-3 py-2")
-    if score >= threshold * 0.6:
+    if score >= thr * 0.6:
         return dbc.Badge(f"SUSPECT ({score:.1%})", color="warning", className="fs-6 px-3 py-2")
     return dbc.Badge(f"LÉGITIME ({score:.1%})", color="success", className="fs-6 px-3 py-2")
 
@@ -113,18 +126,19 @@ def shap_waterfall_fig(shap_details, title=""):
 
 
 def gauge_fig(score):
+    thr = _get_threshold()
     fig = go.Figure(go.Indicator(
         mode="gauge+number", value=score * 100,
         number={"suffix": "%", "font": {"size": 36}},
         gauge={
             "axis": {"range": [0, 100]},
-            "bar": {"color": "#E53935" if score >= threshold else "#43A047"},
+            "bar": {"color": "#E53935" if score >= thr else "#43A047"},
             "steps": [
-                {"range": [0, threshold * 60], "color": "#E8F5E9"},
-                {"range": [threshold * 60, threshold * 100], "color": "#FFF3E0"},
-                {"range": [threshold * 100, 100], "color": "#FFEBEE"},
+                {"range": [0, thr * 60], "color": "#E8F5E9"},
+                {"range": [thr * 60, thr * 100], "color": "#FFF3E0"},
+                {"range": [thr * 100, 100], "color": "#FFEBEE"},
             ],
-            "threshold": {"line": {"color": "black", "width": 3}, "thickness": 0.8, "value": threshold * 100},
+            "threshold": {"line": {"color": "black", "width": 3}, "thickness": 0.8, "value": thr * 100},
         },
     ))
     fig.update_layout(height=220, margin=dict(l=20, r=20, t=30, b=10))
@@ -132,7 +146,7 @@ def gauge_fig(score):
 
 
 def copilot_panel(result):
-    summary = generate_summary(result, mode="auto")
+    summary = _generate_summary(result, mode="auto")
     color_map = {"high": "danger", "medium": "warning", "low": "success"}
     color = color_map.get(summary["risk_level"], "secondary")
     return dbc.Card([
@@ -296,17 +310,18 @@ page_analyste = html.Div([
 
 
 # ══════════════════════════════════════════════════════════════
-# PAGE ADMIN (construite à la demande, pas au démarrage)
+# PAGE ADMIN (construite à la demande)
 # ══════════════════════════════════════════════════════════════
 
 def build_admin_page():
     lgb_m = metrics_info.get("lightgbm_tuned", {})
     cost = cost_info.get("at_optimal", {})
+    thr = _get_threshold()
 
     kpi_row = dbc.Row([
         dbc.Col(kpi_card(f"{lgb_m.get('pr_auc', 0):.3f}", "PR-AUC", "primary"), md=2),
         dbc.Col(kpi_card(f"{lgb_m.get('roc_auc', 0):.3f}", "ROC-AUC", "info"), md=2),
-        dbc.Col(kpi_card(f"{threshold:.2f}", "Seuil optimal", "dark"), md=2),
+        dbc.Col(kpi_card(f"{thr:.2f}", "Seuil optimal", "dark"), md=2),
         dbc.Col(kpi_card(f"{cost.get('precision', 0):.1%}", "Précision", "success"), md=2),
         dbc.Col(kpi_card(f"{cost.get('recall', 0):.1%}", "Rappel", "warning"), md=2),
         dbc.Col(kpi_card(f"{cost.get('f1', 0):.3f}", "F1-score", "danger"), md=2),
@@ -319,7 +334,7 @@ def build_admin_page():
         dbc.Col(kpi_card(f"{cost_info.get('cost_fp_fixed_fcfa', 0):,} F", "Coût/vérification", "secondary"), md=3),
     ], className="mb-4")
 
-    # Importance SHAP globale (depuis le CSV pré-calculé, pas de recalcul)
+    # Importance SHAP globale (depuis le CSV pré-calculé)
     shap_path = ARTIFACT_DIR / "shap_global_importance.csv"
     shap_fig = go.Figure()
     if shap_path.exists():
@@ -334,9 +349,10 @@ def build_admin_page():
         )
 
     # Confusion matrix (sur échantillon réduit)
+    model = _get_model()
     X_t, y_t = _get_test_data()
     proba_test = model.predict_proba(X_t)[:, 1]
-    preds_test = (proba_test >= threshold).astype(int)
+    preds_test = (proba_test >= thr).astype(int)
     tp = ((preds_test == 1) & (y_t == 1)).sum()
     fp = ((preds_test == 1) & (y_t == 0)).sum()
     fn = ((preds_test == 0) & (y_t == 1)).sum()
@@ -348,7 +364,7 @@ def build_admin_page():
         text=[[f"TN\n{tn:,}", f"FP\n{fp:,}"], [f"FN\n{fn:,}", f"TP\n{tp:,}"]],
         texttemplate="%{text}", textfont={"size": 16},
     ))
-    cm_fig.update_layout(title=f"Matrice de confusion (seuil={threshold:.2f})", height=350,
+    cm_fig.update_layout(title=f"Matrice de confusion (seuil={thr:.2f})", height=350,
                          margin=dict(l=10, r=10, t=40, b=30))
 
     return html.Div([
@@ -362,7 +378,6 @@ def build_admin_page():
             dbc.Col(dbc.Card(dbc.CardBody(dcc.Graph(figure=cm_fig, config={"displayModeBar": False})),
                              className="shadow"), md=5),
         ], className="mb-4"),
-        # Stats BD (si connectée)
         html.Div(id="admin-db-stats"),
         dbc.Button([html.I(className="bi bi-arrow-clockwise me-2"), "Rafraîchir stats BD"],
                    id="btn-refresh-stats", color="outline-primary", className="mt-2",
@@ -409,8 +424,8 @@ def render_page(pathname, session):
     if pathname == "/analyste":
         return page_analyste
     if pathname == "/admin" and session.get("role") == "admin":
-        return build_admin_page()  # construit à la demande
-    return page_saisie  # default = /saisie
+        return build_admin_page()
+    return page_saisie
 
 
 # ══════════════════════════════════════════════════════════════
@@ -425,10 +440,8 @@ def render_page(pathname, session):
 )
 def handle_login(n_login, n_demo, email, password, session):
     trigger = ctx.triggered_id
-
     if trigger == "btn-demo":
         return {"logged_in": True, "role": "admin", "user_id": None, "email": "demo"}, "", "/saisie"
-
     if trigger == "btn-login" and email and password:
         try:
             from database import sign_in
@@ -439,7 +452,6 @@ def handle_login(n_login, n_demo, email, password, session):
             }, "", "/saisie"
         except Exception as e:
             return no_update, dbc.Alert(f"Erreur : {str(e)[:100]}", color="danger"), no_update
-
     return no_update, no_update, no_update
 
 
@@ -485,13 +497,13 @@ def score_manual(n, amount, hour, merchant, distance, card, age, txn_h, avg30, f
         }
         raw_df = pd.DataFrame([txn])
         X = engineer_features(raw_df, merchant_encoder, is_training=False)
-        result = explain_single(X)
+        result = _explain_single(X)
 
         # Log en BD si possible
         if DB_ENABLED:
             try:
                 from database import log_transaction
-                summary = generate_summary(result, mode="auto")
+                summary = _generate_summary(result, mode="auto")
                 log_transaction(txn, result, summary, source="manual", user_id=session.get("user_id"))
             except Exception:
                 pass
@@ -536,6 +548,8 @@ def analyze_csv(contents, filename):
         if missing:
             return no_update, dbc.Alert(f"Colonnes manquantes : {missing}", color="danger")
 
+        model = _get_model()
+        threshold = _get_threshold()
         X = engineer_features(df_raw, merchant_encoder, is_training=False)
         proba = model.predict_proba(X)[:, 1]
         preds = (proba >= threshold).astype(int)
@@ -589,7 +603,6 @@ def load_analyste_data(n, source, filter_pred, topn):
     topn = int(topn or 30)
 
     if source == "db" and DB_ENABLED:
-        # Charger depuis Supabase
         try:
             from database import get_recent_transactions
             fraud_only = filter_pred == "fraud"
@@ -614,7 +627,9 @@ def load_analyste_data(n, source, filter_pred, topn):
         except Exception as e:
             return dbc.Alert(f"Erreur BD : {str(e)}", color="danger")
 
-    # Source = jeu de test (démo) — chargement lazy
+    # Source = jeu de test (démo)
+    model = _get_model()
+    threshold = _get_threshold()
     X_t, y_t = _get_test_data()
     proba = model.predict_proba(X_t)[:, 1]
     preds = (proba >= threshold).astype(int)
@@ -669,7 +684,6 @@ def show_detail(selected, data):
 
     row = data[selected[0]]
 
-    # Si c'est un enregistrement BD (a un id), récupérer les infos
     if "id" in row and DB_ENABLED:
         try:
             from database import get_transaction_detail
@@ -692,7 +706,6 @@ def show_detail(selected, data):
         except Exception:
             pass
 
-    # Sinon, scoring local depuis X_test (lazy)
     X_t, _ = _get_test_data()
     idx = X_t[
         (X_t["amount"].round(3) == round(row.get("amount", 0), 3)) &
@@ -703,7 +716,7 @@ def show_detail(selected, data):
         return dbc.Alert("Transaction introuvable pour le détail SHAP.", color="warning")
 
     X_row = X_t.iloc[[idx[0]]]
-    result = explain_single(X_row)
+    result = _explain_single(X_row)
 
     return dbc.Card([
         dbc.CardHeader(html.Div([html.H5("Détail transaction", className="d-inline me-3"),
