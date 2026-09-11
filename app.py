@@ -13,8 +13,10 @@ Intégration Supabase :
 
 Mode dégradé : sans Supabase, scoring local fonctionne (pas d'historique/auth).
 """
+
 from dotenv import load_dotenv
 load_dotenv()
+
 import base64
 import io
 import json
@@ -40,7 +42,7 @@ from features import (
 from explain import explain_single, generate_summary, get_global_importance
 from database import is_configured as db_configured
 
-# ── Chargement artefacts ───────────────────────────────────────
+# ── Chargement artefacts (léger — pas de X_test au démarrage) ──
 ARTIFACT_DIR = Path(__file__).parent / "artifacts"
 model = joblib.load(ARTIFACT_DIR / "lgbm_model.joblib")
 threshold = joblib.load(ARTIFACT_DIR / "optimal_threshold.joblib")
@@ -51,12 +53,18 @@ with open(ARTIFACT_DIR / "cost_analysis.json", encoding="utf-8") as f:
 with open(ARTIFACT_DIR / "metrics.json", encoding="utf-8") as f:
     metrics_info = json.load(f)
 
-_X_full = pd.read_parquet(ARTIFACT_DIR / "X_test.parquet")
-_y_full = pd.read_parquet(ARTIFACT_DIR / "y_test.parquet")["is_fraud"]
-_sample_idx = _X_full.sample(n=min(500, len(_X_full)), random_state=42).index
-X_test = _X_full.loc[_sample_idx].reset_index(drop=True)
-y_test = _y_full.loc[_sample_idx].reset_index(drop=True)
-del _X_full, _y_full
+# ── Chargement lazy de X_test / y_test (économie mémoire) ──────
+_test_data_cache = {}
+
+def _get_test_data():
+    """Charge X_test et y_test à la demande (pas au démarrage)."""
+    if "X" not in _test_data_cache:
+        _X = pd.read_parquet(ARTIFACT_DIR / "X_test.parquet")
+        _y = pd.read_parquet(ARTIFACT_DIR / "y_test.parquet")["is_fraud"]
+        idx = _X.sample(n=min(500, len(_X)), random_state=42).index
+        _test_data_cache["X"] = _X.loc[idx].reset_index(drop=True)
+        _test_data_cache["y"] = _y.loc[idx].reset_index(drop=True)
+    return _test_data_cache["X"], _test_data_cache["y"]
 
 DB_ENABLED = db_configured()
 
@@ -288,7 +296,7 @@ page_analyste = html.Div([
 
 
 # ══════════════════════════════════════════════════════════════
-# PAGE ADMIN
+# PAGE ADMIN (construite à la demande, pas au démarrage)
 # ══════════════════════════════════════════════════════════════
 
 def build_admin_page():
@@ -311,7 +319,7 @@ def build_admin_page():
         dbc.Col(kpi_card(f"{cost_info.get('cost_fp_fixed_fcfa', 0):,} F", "Coût/vérification", "secondary"), md=3),
     ], className="mb-4")
 
-    # Importance SHAP globale
+    # Importance SHAP globale (depuis le CSV pré-calculé, pas de recalcul)
     shap_path = ARTIFACT_DIR / "shap_global_importance.csv"
     shap_fig = go.Figure()
     if shap_path.exists():
@@ -325,13 +333,14 @@ def build_admin_page():
             margin=dict(l=10, r=10, t=40, b=30), plot_bgcolor="white", xaxis_title="|SHAP| moyen (%)",
         )
 
-    # Confusion matrix
-    proba_test = model.predict_proba(X_test)[:, 1]
+    # Confusion matrix (sur échantillon réduit)
+    X_t, y_t = _get_test_data()
+    proba_test = model.predict_proba(X_t)[:, 1]
     preds_test = (proba_test >= threshold).astype(int)
-    tp = ((preds_test == 1) & (y_test == 1)).sum()
-    fp = ((preds_test == 1) & (y_test == 0)).sum()
-    fn = ((preds_test == 0) & (y_test == 1)).sum()
-    tn = ((preds_test == 0) & (y_test == 0)).sum()
+    tp = ((preds_test == 1) & (y_t == 1)).sum()
+    fp = ((preds_test == 1) & (y_t == 0)).sum()
+    fn = ((preds_test == 0) & (y_t == 1)).sum()
+    tn = ((preds_test == 0) & (y_t == 0)).sum()
 
     cm_fig = go.Figure(go.Heatmap(
         z=[[tn, fp], [fn, tp]], x=["Prédit Légitime", "Prédit Fraude"],
@@ -359,9 +368,6 @@ def build_admin_page():
                    id="btn-refresh-stats", color="outline-primary", className="mt-2",
                    style={"display": "inline-block" if DB_ENABLED else "none"}),
     ])
-
-
-page_admin = build_admin_page()
 
 
 # ══════════════════════════════════════════════════════════════
@@ -403,7 +409,7 @@ def render_page(pathname, session):
     if pathname == "/analyste":
         return page_analyste
     if pathname == "/admin" and session.get("role") == "admin":
-        return page_admin
+        return build_admin_page()  # construit à la demande
     return page_saisie  # default = /saisie
 
 
@@ -608,18 +614,19 @@ def load_analyste_data(n, source, filter_pred, topn):
         except Exception as e:
             return dbc.Alert(f"Erreur BD : {str(e)}", color="danger")
 
-    # Source = jeu de test (démo)
-    proba = model.predict_proba(X_test)[:, 1]
+    # Source = jeu de test (démo) — chargement lazy
+    X_t, y_t = _get_test_data()
+    proba = model.predict_proba(X_t)[:, 1]
     preds = (proba >= threshold).astype(int)
 
-    df_show = X_test.copy()
+    df_show = X_t.copy()
     df_show["score"] = np.round(proba, 4)
     df_show["prediction"] = preds
-    df_show["réel"] = y_test.values
+    df_show["réel"] = y_t.values
     df_show["statut"] = np.where(
-        (preds == 1) & (y_test.values == 1), "✅ TP",
-        np.where((preds == 1) & (y_test.values == 0), "⚠️ FP",
-                 np.where((preds == 0) & (y_test.values == 1), "❌ FN", "— TN")))
+        (preds == 1) & (y_t.values == 1), "✅ TP",
+        np.where((preds == 1) & (y_t.values == 0), "⚠️ FP",
+                 np.where((preds == 0) & (y_t.values == 1), "❌ FN", "— TN")))
 
     if filter_pred == "fraud":
         df_show = df_show[df_show["prediction"] == 1]
@@ -685,16 +692,17 @@ def show_detail(selected, data):
         except Exception:
             pass
 
-    # Sinon, scoring local depuis X_test
-    idx = X_test[
-        (X_test["amount"].round(3) == round(row.get("amount", 0), 3)) &
-        (X_test["hour"] == row.get("hour", -1))
+    # Sinon, scoring local depuis X_test (lazy)
+    X_t, _ = _get_test_data()
+    idx = X_t[
+        (X_t["amount"].round(3) == round(row.get("amount", 0), 3)) &
+        (X_t["hour"] == row.get("hour", -1))
     ].index
 
     if len(idx) == 0:
         return dbc.Alert("Transaction introuvable pour le détail SHAP.", color="warning")
 
-    X_row = X_test.iloc[[idx[0]]]
+    X_row = X_t.iloc[[idx[0]]]
     result = explain_single(X_row)
 
     return dbc.Card([
