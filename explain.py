@@ -344,7 +344,11 @@ CONSIGNES :
             temperature=0.3,
         )
         elapsed_ms = round((time.time() - t0) * 1000)
-        text = response.choices[0].message.content.strip()
+                text = response.choices[0].message.content
+        if not text or not text.strip():
+            return {**generate_summary_rules(explain_result),
+                    "mode": "rule-based (réponse LLM vide)"}
+        text = text.strip()
         lines = [l.strip() for l in text.split("\n") if l.strip()]
 
         return {
