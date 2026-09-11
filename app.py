@@ -51,8 +51,12 @@ with open(ARTIFACT_DIR / "cost_analysis.json", encoding="utf-8") as f:
 with open(ARTIFACT_DIR / "metrics.json", encoding="utf-8") as f:
     metrics_info = json.load(f)
 
-X_test = pd.read_parquet(ARTIFACT_DIR / "X_test.parquet")
-y_test = pd.read_parquet(ARTIFACT_DIR / "y_test.parquet")["is_fraud"]
+_X_full = pd.read_parquet(ARTIFACT_DIR / "X_test.parquet")
+_y_full = pd.read_parquet(ARTIFACT_DIR / "y_test.parquet")["is_fraud"]
+_sample_idx = _X_full.sample(n=min(500, len(_X_full)), random_state=42).index
+X_test = _X_full.loc[_sample_idx].reset_index(drop=True)
+y_test = _y_full.loc[_sample_idx].reset_index(drop=True)
+del _X_full, _y_full
 
 DB_ENABLED = db_configured()
 
